@@ -1,0 +1,24 @@
+name: CI
+
+# Runs the migration tests (PGlite, in memory: no database or secrets needed)
+# on every pull request and push to main. "Run workflow" starts it by hand.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Migration tests
+        run: npm test
