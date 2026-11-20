@@ -6,6 +6,7 @@ const path = require('path');
 const { PGlite } = require('@electric-sql/pglite');
 
 const MIGRATION = fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', '0030_practice_followups.sql'), 'utf8');
+const MIGRATION_0031 = fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', '0031_practice_followup_skill_pack.sql'), 'utf8');
 const S = '11111111-1111-4111-8111-111111111111';
 const A = '22222222-2222-4222-8222-222222222222';
 
@@ -77,4 +78,17 @@ test('RLS is on for both tables', async () => {
   const db = await freshDb();
   const { rows } = await db.query(`select relname, relrowsecurity from pg_class where relname in ('practice_followups', 'practice_followup_responses') order by relname`);
   assert.deepEqual(rows.map((r) => [r.relname, r.relrowsecurity]), [['practice_followup_responses', true], ['practice_followups', true]]);
+});
+
+test('0031 adds a nullable skill_pack column and is safe to re-run', async () => {
+  const db = await freshDb();
+  await db.exec(MIGRATION_0031);
+  await db.exec(MIGRATION_0031);
+  const { rows } = await addFollowup(db, 'topic:quality');
+  await db.query(`update practice_followups set skill_pack = '{"label":"Understanding Quality","questions":[]}' where id = $1`, [rows[0].id]);
+  const r = (await db.query('select skill_pack from practice_followups where id = $1', [rows[0].id])).rows[0];
+  assert.equal(r.skill_pack.label, 'Understanding Quality');
+  const other = (await addFollowup(db, 'en.figurative.pun-vs-alliteration')).rows[0];
+  const o = (await db.query('select skill_pack from practice_followups where id = $1', [other.id])).rows[0];
+  assert.equal(o.skill_pack, null);
 });
