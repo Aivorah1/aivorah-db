@@ -92,3 +92,49 @@ test('0031 adds a nullable skill_pack column and is safe to re-run', async () =>
   const o = (await db.query('select skill_pack from practice_followups where id = $1', [other.id])).rows[0];
   assert.equal(o.skill_pack, null);
 });
+
+const MIGRATION_0032 = fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', '0032_explain_and_practise.sql'), 'utf8');
+async function db32() {
+  const db = await freshDb();
+  await db.exec(MIGRATION_0031);
+  await db.exec(MIGRATION_0032);
+  await db.exec(MIGRATION_0032); // safe to re-run
+  return db;
+}
+
+test('0032: explanations are kept per test question; generated questions cannot repeat by id or text', async () => {
+  const db = await db32();
+  const f = (await addFollowup(db, 'topic:quality')).rows[0].id;
+  await db.query(`insert into practice_explanations (followup_id, student_id, attempt_id, question_index, method, payload) values ($1, $2, $3, 3, 'rule', '{"title":"t","body":"b"}')`, [f, S, A]);
+  await db.query(`insert into practice_explanations (followup_id, student_id, attempt_id, question_index, method, variant, payload) values ($1, $2, $3, 3, 'steps', 'another_way', '{"title":"t","body":"b"}')`, [f, S, A]);
+  await assert.rejects(db.query(`insert into practice_explanations (followup_id, student_id, attempt_id, question_index, method, variant, payload) values ($1, $2, $3, 3, 'rule', 'louder', '{}')`, [f, S, A]));
+  const gq = (id, fp, level = 2) => db.query(`insert into practice_generated_questions (followup_id, question_id, origin_question_index, level, payload, fingerprint) values ($1, $2, 3, $4, '{"type":"mcq"}', $3)`, [f, id, fp, level]);
+  await gq('gq-1', 'which firm advertised');
+  await assert.rejects(gq('gq-1', 'other text'));
+  await assert.rejects(gq('gq-2', 'which firm advertised'));
+  await assert.rejects(gq('gq-3', 'new text', 4));
+  await gq('gq-2', 'new text');
+  const { rows } = await db.query('select count(*)::int n from practice_generated_questions');
+  assert.equal(rows[0].n, 2);
+});
+
+test('0032: new answer columns default safely so first-version rows stay valid', async () => {
+  const db = await db32();
+  const f = (await addFollowup(db)).rows[0].id;
+  await addResponse(db, f, 'pa-mcq-01', 1);
+  const r = (await db.query('select origin_question_index, is_memory_check, skipped, mistake_tag, question_level from practice_followup_responses')).rows[0];
+  assert.deepEqual(r, { origin_question_index: null, is_memory_check: false, skipped: false, mistake_tag: null, question_level: null });
+  const fu = (await db.query('select current_focus_index, current_is_memory_check from practice_followups where id = $1', [f])).rows[0];
+  assert.deepEqual(fu, { current_focus_index: null, current_is_memory_check: false });
+});
+
+test('0032: deleting the original test removes its explanations and generated questions', async () => {
+  const db = await db32();
+  const f = (await addFollowup(db, 'topic:quality')).rows[0].id;
+  await db.query(`insert into practice_explanations (followup_id, student_id, attempt_id, question_index, method, payload) values ($1, $2, $3, 1, 'rule', '{}')`, [f, S, A]);
+  await db.query(`insert into practice_generated_questions (followup_id, question_id, payload, fingerprint) values ($1, 'gq-1', '{}', 'x')`, [f]);
+  await db.query(`delete from topic_attempts where id = '${A}'`);
+  const n = async (t) => (await db.query(`select count(*)::int n from ${t}`)).rows[0].n;
+  assert.equal(await n('practice_explanations'), 0);
+  assert.equal(await n('practice_generated_questions'), 0);
+});
