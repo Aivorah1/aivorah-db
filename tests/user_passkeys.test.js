@@ -39,3 +39,16 @@ test('deleting the user deletes their passkeys', async () => {
   const { rows } = await db.query('select count(*)::int as n from user_passkeys');
   assert.equal(rows[0].n, 0);
 });
+
+test('retiring passkeys preserves the user and is safe to reapply', async (t) => {
+  const db = await freshDb();
+  t.after(() => db.close());
+  await add(db, 'laptop');
+  const removal = fs.readFileSync(path.join(__dirname, '..', 'supabase', 'migrations', '0034_drop_user_passkeys.sql'), 'utf8');
+  await db.exec(removal);
+  await db.exec(removal);
+  const { rows: tables } = await db.query("select to_regclass('public.user_passkeys') as passkeys");
+  assert.equal(tables[0].passkeys, null);
+  const { rows: users } = await db.query('select id, email from users');
+  assert.deepEqual(users, [{ id: U, email: 'asha@x.com' }]);
+});
